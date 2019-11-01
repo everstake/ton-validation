@@ -5,14 +5,21 @@ from contextlib import contextmanager
 import os
 import sys
 import re
+from tinydb import TinyDB, Query
+import time
 import pendulum
+from loguru import logger
 '''python --version
-Tested on Ubuntu 18.04 with Python 2.7.15
-sudo apt install python-pip
-pip install pendulum
-pip install plumbum
+Tested on Ubuntu 18.04 with Python 3.6.8
 set env variable in .bashrc file using export, here user=ton
-export FIFTPATH=/home/ton/ton-sources/ton/crypto/fift/lib:/home/ton/ton-sources/ton/crypto/smartcont'''
+export FIFTPATH=/home/ton/ton-sources/ton/crypto/fift/lib:/home/ton/ton-sources/ton/crypto/smartcont
+export BETTER_EXCEPTIONS=1
+sudo apt install python3-pip
+sudo apt install python3-venv
+python3 -m venv env
+if you use bash -> source env/bin/activate
+pip install -r requirements.txt
+'''
 FIFTPATH = local.env["FIFTPATH"]
 
 #you can connect to external interfaces IP:9300 or localhost
@@ -23,14 +30,20 @@ CONNECT_STR_ENGINE_CONSOLE = "127.0.0.1:9200"
 # Bounceable address (for later access)
 WALLET_ADDR = "kf82xRnEMLVIlElyrtGMtclN_4MvxDJLc0C7UM_PxEDkhV-B"
 
+# wallet address = -1:36c519c430b548944972aed18cb5c94dff832fc4324b7340bb50cfcfc440e485
+# address for compute_returned_stake
+WALLET_ADDR_C = "36c519c430b548944972aed18cb5c94dff832fc4324b7340bb50cfcfc440e485"
+
 # Wallet filename  wallet_03_10_2019.addr
 # in basename - without ext
 WALLET_FILENAME = "wallet_03_10_2019"
 
 # wallet seqno
-CURRENT_SEQNO = ""
+CURRENT_SEQNO = 0
 
 ELECTOR_ADDR = ""
+
+RETURNED_STAKE = 0
 
 # ACTIVE_ELECTION_ID = ""
 START_ELECTION_PERIOD = ""
@@ -63,12 +76,6 @@ VAR_D = ""
 # got signature
 VAR_E = ""
 
-#Check path and str type
-#we use last.log in DIR and
-# TODO: log.log + "success" file and .boc files in each ELECTION_DIR directory
-#ELECTION_DIR =""
-
-
 #Assign executables found in current dir
 DIR = local.path(__file__) / '..'
 fift = local[DIR / 'fift']
@@ -77,7 +84,6 @@ validatorengine = local[DIR / 'validator-engine-console']
 
 def check_env():
     '''check env for FIFTPATH'''
-    #print("TODO")
     pass
 
 def get_elector_address():
@@ -93,9 +99,9 @@ def get_elector_address():
         (echo[chain[1:3]] >> "last.log")()
         x = re.search(r"elector_addr:x[0-9a-fA-F]{64}", chain[2])
         #print(x.group())
-        ELECTOR_ADDR = re.search(r"[0-9a-fA-F]{64}", x.group())
-        ELECTOR_ADDR = ELECTOR_ADDR.group()
-        if ELECTOR_ADDR:
+        if x:
+            y = re.search(r"[0-9a-fA-F]{64}", x.group())
+            ELECTOR_ADDR = y.group()
             print("ELECTOR_ADDR = " + ELECTOR_ADDR)
             return
         else:
@@ -116,9 +122,10 @@ def get_election_time():
         #(echo[chain[1:3]] >> "log.log")()
         x = re.search(r"result:\s\s\[\s\d+\s\]", chain[2])
         #print(x.group())
-        START_ELECTION_PERIOD = re.search(r"\d+", x.group())
-        START_ELECTION_PERIOD = START_ELECTION_PERIOD.group()
-        print("START_ELECTION_PERIOD = " + START_ELECTION_PERIOD)
+        if x:
+            y = re.search(r"\d+", x.group())
+            START_ELECTION_PERIOD = y.group()
+            print("START_ELECTION_PERIOD = " + START_ELECTION_PERIOD)
         WORK_TIME = 1571749200 #Tuesday, October 22, 2019 4:00:00 PM GMT+03:00
         if (int(START_ELECTION_PERIOD) > WORK_TIME ):
             END_ELECTION_PERIOD = int(START_ELECTION_PERIOD)+86400
@@ -142,21 +149,25 @@ def get_election_time():
     except Exception as error:
         print(error, 'Failed on get_election_time')
 
-def get_seqno():
+def get_seqno(q):
     '''get_seqno then parse it'''
     global CURRENT_SEQNO
     print("Getting CURRENT_SEQNO...")
     try:
         #lite-client -a IP:9300 -p liteserver.pub -rc 'runmethod kf82xRnEMLVIlElyrtGMtclN_4MvxDJLc0C7UM_PxEDkhV-B seqno'
         chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-rc", 'runmethod ' + WALLET_ADDR + ' seqno'].run(retcode=None)
+        if q:
+            (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
+        else:
+            (echo[chain[1:3]] >> "last.log")()
         x = re.search(r"result:\s\s\[\s\d+\s\]", chain[2])
         if x:
             y = re.search(r"\d+", x.group())
-            CURRENT_SEQNO = y.group()
+            CURRENT_SEQNO = int(y.group())
             #LAST_SEQNO = local.env["LAST_SEQNO"]
             #print ( "LAST_SEQNO was : " + LAST_SEQNO)
 
-            print("CURRENT_SEQNO = " + CURRENT_SEQNO)
+            print("CURRENT_SEQNO = " + str(CURRENT_SEQNO))
             #local.env["LAST_SEQNO"] = CURRENT_SEQNO
             #return CURRENT_SEQNO
     except Exception as error:
@@ -186,7 +197,7 @@ def write_success():
             print("Some kind of error")
             return
     except Exception as error:
-        print(error, 'Failed on check_success')
+        print(error, 'Failed on write_success')
 
 
 def check_3_files():
@@ -253,8 +264,6 @@ def make_keys():
             #return
     except Exception as error:
         print(error, 'Failed on make_keys')
-
-
 
 def make_keys_adnl():
     '''make adnl keys'''
@@ -337,8 +346,6 @@ def engine_console_sign():
     except Exception as error:
         print(error, 'Failed on engine_console_sign')
 
-
-
 def validator_elect_sign():
     '''fift validator-elect-signed'''
     print("Signing validator request...")
@@ -354,53 +361,86 @@ def validator_elect_sign():
     except Exception as error:
         print(error, 'Failed on validator_elect_sign')
 
-
-def validator_wallet_sign():
+def wallet_sign(amount, in_file, out_file, q):
     '''fift wallet.fif'''
-    print("Signing validator request with our wallet...")
+    print("Signing request with our wallet...")
     try:
-        print("CURRENT_SEQNO = " + CURRENT_SEQNO)
         #fift -s wallet.fif wallet_03_10_2019 -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 seqno 100001. -B validator-query.boc [<wallet-query>] ==>>  wallet-query.boc
-        chain = fift ["-s", "wallet.fif", WALLET_FILENAME, "-1:"+ELECTOR_ADDR, CURRENT_SEQNO, STAKE, "-B", "validator-query.boc", "finish"].run(retcode=None)
+        #old chain = fift ["-s", "wallet.fif", WALLET_FILENAME, "-1:"+ELECTOR_ADDR, str(CURRENT_SEQNO), STAKE, "-B", "validator-query.boc", "finish"].run(retcode=None)
+        chain = fift ["-s", "wallet.fif", WALLET_FILENAME, "-1:"+ELECTOR_ADDR, str(CURRENT_SEQNO), amount, "-B", in_file, out_file].run(retcode=None)
         #print(chain)
-        (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
-        
+        if q:
+            (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
+        else:
+            (echo[chain[1:3]] >> "last.log")()
         w = re.search(r"Saved to file", chain[1],re.I)
         if w:
-            print("Generated finish.boc file")
+            print("Generated "+out_file+" file")
         else:
             print("Some kind of error")
     except Exception as error:
-        print(error, 'Failed on validator_wallet_sign')
+        print(error, 'Failed on wallet_sign')
 
-def sendfile():
+def sendfile(f, q):
     '''liteclient sendfile'''
     print("Sending finish.boc to blockchain...")
     try:
         #lite-client -a IP:9300 -p liteserver.pub -rc ' sendfile validator-query-send.boc'
-        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-rc", 'sendfile finish.boc'].run(retcode=None)
-        (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
+        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-rc", 'sendfile '+f].run(retcode=None)
+        if q:
+            (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
+        else:
+            (echo[chain[1:3]] >> "last.log")()
         x = re.search(r"sending query from file", chain[2])
         if x:
             print("Sendfile is OK")
-            result = x.group()
-            write_success()
+            #result = x.group()
+            return True
         else:
             print("Some kind of error")
     except Exception as error:
         print(error, 'Failed on sendfile')
 
+def compute_returned_stake():
+    '''compute_returned_stake then parse it'''
+    global RETURNED_STAKE
+    print("Running compute_returned_stake...")
+    try:
+        #lite-client -a IP:9300 -p liteserver.pub -rc ' runmethod -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 compute_returned_stake 0x36c519c430b548944972aed18cb5c94dff832fc4324b7340bb50cfcfc440e485'
+        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-rc", 'runmethod -1:' + ELECTOR_ADDR + ' compute_returned_stake 0x'+WALLET_ADDR_C].run(retcode=None)
+        (echo[chain[1:3]] >> "last.log")()
+        x = re.search(r"result:\s\s\[\s\d+\s\]", chain[2])
+        if x:
+            y = re.search(r"\d+", x.group())
+            RETURNED_STAKE = int(y.group())
+            if (RETURNED_STAKE > 0):
+                print("RETURNED_STAKE = " + str(RETURNED_STAKE))
+                return True
+            else:
+                print("RETURNED_STAKE = 0")
+                return False
+    except Exception as error:
+        print(error, 'Failed on compute_returned_stake')
+
 
 class Cli(cli.Application):
-    """Small utility to automate validator requests as shown in
+    """Small utility to automate validator requests and get rewards as shown in
     https://test.ton.org/Validator-HOWTO.txt
     """
-    VERSION = "1.0"
+    VERSION = "1.1"
     def main(self):
         if not self.nested_command:
             print("Current DIR:  " + DIR)
             print("Current FIFTPATH:  " + FIFTPATH)
             get_elector_address()
+            if compute_returned_stake():
+                get_seqno(False)
+                wallet_sign("1.", "recover-query.boc", "return-stake",False)
+                if sendfile("return-stake.boc",False):
+                    print("Sleep for 15 seconds to complete transaction")
+                    time.sleep(15)     #Test how much time it takes for "seqno" to change
+                    get_seqno(False)
+
             get_election_time()
             check_success()
             make_keys()
@@ -408,10 +448,13 @@ class Cli(cli.Application):
             validator_elect_req()
             engine_console_sign()
             validator_elect_sign()
-            get_seqno()
-            validator_wallet_sign()
-            sendfile()
-            get_seqno()
+            get_seqno(True)
+            wallet_sign(STAKE, "validator-query.boc", "finish",True)
+            if sendfile("finish.boc",True):
+                write_success()
+                print("Sleep for 15 seconds to complete transaction")
+                time.sleep(15)
+                get_seqno(True)
             print("-------------------------")
             print("Variables : ")
             print(START_ELECTION_PERIOD)
