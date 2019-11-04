@@ -5,7 +5,7 @@ from contextlib import contextmanager
 import os
 import sys
 import re
-from tinydb import TinyDB, Query
+from tinydb import TinyDB, Query, where
 import time
 import pendulum
 from loguru import logger
@@ -38,15 +38,19 @@ WALLET_ADDR_C = "36c519c430b548944972aed18cb5c94dff832fc4324b7340bb50cfcfc440e48
 # in basename - without ext
 WALLET_FILENAME = "wallet_03_10_2019"
 
+BALANCE = -1
+
 # wallet seqno
-CURRENT_SEQNO = 0
+CURRENT_SEQNO = -1
 
 ELECTOR_ADDR = ""
 
-RETURNED_STAKE = 0
+RETURNED_STAKE = -1
+
+REWARD = -1
 
 # ACTIVE_ELECTION_ID = ""
-START_ELECTION_PERIOD = ""
+START_ELECTION_PERIOD = -1
 
 # START_ELECTION_PERIOD + 1 DAY
 END_ELECTION_PERIOD = 0 
@@ -55,7 +59,7 @@ END_ELECTION_PERIOD = 0
 MAX_FACTOR = "5"
 
 #Stake amount + extra 1 GRAM to cover fee
-STAKE = "100001."
+STAKE = "100001"
 
 # newkey
 VAR_A = ""
@@ -98,15 +102,14 @@ def get_elector_address():
         (echo[now.to_datetime_string()] >> "last.log")()
         (echo[chain[1:3]] >> "last.log")()
         x = re.search(r"elector_addr:x[0-9a-fA-F]{64}", chain[2])
-        #print(x.group())
         if x:
             y = re.search(r"[0-9a-fA-F]{64}", x.group())
             ELECTOR_ADDR = y.group()
             print("ELECTOR_ADDR = " + ELECTOR_ADDR)
-            return
+            return True
         else:
             print("Some error on get_elector_address")
-            sys.exit()
+            return False
     except Exception as error:
         print(error, 'Failed on get_elector_address')
 
@@ -119,33 +122,30 @@ def get_election_time():
     try:
         #lite-client -a IP:9300 -p liteserver.pub -rc 'runmethod -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 active_election_id'
         chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-rc", 'runmethod -1:' + ELECTOR_ADDR + ' active_election_id'].run(retcode=None)
-        #(echo[chain[1:3]] >> "log.log")()
         x = re.search(r"result:\s\s\[\s\d+\s\]", chain[2])
-        #print(x.group())
+        WORK_TIME = 1571749200 #Tuesday, October 22, 2019 4:00:00 PM GMT+03:00
         if x:
             y = re.search(r"\d+", x.group())
-            START_ELECTION_PERIOD = y.group()
-            print("START_ELECTION_PERIOD = " + START_ELECTION_PERIOD)
-        WORK_TIME = 1571749200 #Tuesday, October 22, 2019 4:00:00 PM GMT+03:00
-        if (int(START_ELECTION_PERIOD) > WORK_TIME ):
-            END_ELECTION_PERIOD = int(START_ELECTION_PERIOD)+86400
-            #print("END_ELECTION_PERIOD = " + str(END_ELECTION_PERIOD))
-            p = local.path(DIR / int(START_ELECTION_PERIOD))
-            if p.exists():
-                print(p+" Already exists!")
-                #p.is_dir()
+            START_ELECTION_PERIOD = int(y.group())
+            if (START_ELECTION_PERIOD > WORK_TIME ):
+                print("START_ELECTION_PERIOD = " + str(START_ELECTION_PERIOD))
+                END_ELECTION_PERIOD = START_ELECTION_PERIOD+86400
+                p = local.path(DIR / "ELECTION_DIR" / str(START_ELECTION_PERIOD))
+                if p.exists():
+                    print(p+" Already exists!")
+                else:
+                    p.mkdir()
+                    print(p+" Created this dir!")
+                ELECTION_DIR = p
+                now = pendulum.now(tz='Europe/Kiev')
+                (echo[now.to_datetime_string()] >> p / "log.log")()
+                (echo[chain[1:3]] >> p / "log.log")()
+                return True
             else:
-                p.mkdir()
-                print(p+" Created this dir!")
-            ELECTION_DIR = p
-            now = pendulum.now(tz='Europe/Kiev')
-            (echo[now.to_datetime_string()] >> p / "log.log")()
-            (echo[chain[1:3]] >> p / "log.log")()
-            
-            return
+                print("START_ELECTION_PERIOD = 0, exiting...")
         else:
-            print("START_ELECTION_PERIOD = 0 or in past, exiting...")
-            sys.exit()
+            print("Some kind of error")
+            return False
     except Exception as error:
         print(error, 'Failed on get_election_time')
 
@@ -179,10 +179,10 @@ def check_success():
         p = local.path(ELECTION_DIR / "success" )
         if p.is_file():
             print(p+" Success file already exists, so -> quit")
-            sys.exit()
+            return True
         else:
             print("Success file doesn't exist, so -> continue")
-            return
+            return False
     except Exception as error:
         print(error, 'Failed on check_success')
 
@@ -198,14 +198,6 @@ def write_success():
             return
     except Exception as error:
         print(error, 'Failed on write_success')
-
-
-def check_3_files():
-    #validator-to-sign.bin
-    #validator-query.boc
-    #finish.boc
-    pass
-
 
 def make_keys():
     '''make perm and temp keys'''
@@ -235,8 +227,7 @@ def make_keys():
         print("VAR_B = " + VAR_B)
 
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'addpermkey VAR_A START_ELECTION_PERIOD END_ELECTION_PERIOD'
-        chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'addpermkey '+VAR_A+' '+START_ELECTION_PERIOD+' '+ str(END_ELECTION_PERIOD)].run(retcode=None)
-        #print(chain)
+        chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'addpermkey '+VAR_A+' '+str(START_ELECTION_PERIOD)+' '+ str(END_ELECTION_PERIOD)].run(retcode=None)
         (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
         #re.M to match start of string ^
         y = re.search(r"success", chain[2], re.M)
@@ -246,8 +237,6 @@ def make_keys():
             print("Success = "+y.group())
         else:
             print("Maybe error on addpermkey")
-
-            #return
 
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'addtempkey VAR_A VAR_A END_ELECTION_PERIOD'
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'addtempkey '+VAR_A+' '+VAR_A+' '+str(END_ELECTION_PERIOD)].run(retcode=None)
@@ -314,7 +303,7 @@ def validator_elect_req():
     print("Making validator request...")
     try:
         #fift  -s validator-elect-req.fif WALLET_ADDR  START_ELECTION_PERIOD MAX_FACTOR VAR_C [<validator-to-sign>] ==>>  validator-to-sign.bin
-        chain = fift ["-s", "validator-elect-req.fif", WALLET_ADDR, START_ELECTION_PERIOD, MAX_FACTOR, VAR_C].run(retcode=None)
+        chain = fift ["-s", "validator-elect-req.fif", WALLET_ADDR, str(START_ELECTION_PERIOD), MAX_FACTOR, VAR_C].run(retcode=None)
         (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
         w = re.search(r"^[0-9A-F]+$", chain[1],re.M)
         if w:
@@ -351,7 +340,7 @@ def validator_elect_sign():
     print("Signing validator request...")
     try:
         #fift  -s validator-elect-signed.fif WALLET_ADDR  START_ELECTION_PERIOD MAX_FACTOR VAR_C VAR_B VAR_E [<validator-query>] ==>>  validator-query.boc
-        chain = fift ["-s", "validator-elect-signed.fif", WALLET_ADDR, START_ELECTION_PERIOD, MAX_FACTOR, VAR_C, VAR_B, VAR_E].run(retcode=None)
+        chain = fift ["-s", "validator-elect-signed.fif", WALLET_ADDR, str(START_ELECTION_PERIOD), MAX_FACTOR, VAR_C, VAR_B, VAR_E].run(retcode=None)
         #print(chain)
         (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
         w = re.search(r"^[0-9A-F]+$", chain[1],re.M)
@@ -365,8 +354,7 @@ def wallet_sign(amount, in_file, out_file, q):
     '''fift wallet.fif'''
     print("Signing request with our wallet...")
     try:
-        #fift -s wallet.fif wallet_03_10_2019 -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 seqno 100001. -B validator-query.boc [<wallet-query>] ==>>  wallet-query.boc
-        #old chain = fift ["-s", "wallet.fif", WALLET_FILENAME, "-1:"+ELECTOR_ADDR, str(CURRENT_SEQNO), STAKE, "-B", "validator-query.boc", "finish"].run(retcode=None)
+        #fift -s wallet.fif wallet_03_10_2019 -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 seqno amount -B query.boc [<wallet-query>] ==>>  wallet-query.boc
         chain = fift ["-s", "wallet.fif", WALLET_FILENAME, "-1:"+ELECTOR_ADDR, str(CURRENT_SEQNO), amount, "-B", in_file, out_file].run(retcode=None)
         #print(chain)
         if q:
@@ -422,17 +410,38 @@ def compute_returned_stake():
     except Exception as error:
         print(error, 'Failed on compute_returned_stake')
 
+def get_balance():
+    '''get_balance then parse it'''
+    global BALANCE
+    print("Getting balance...")
+    try:
+        #lite-client -a IP:9300 -p liteserver.pub -rc ' getaccount WALLET_ADDR'
+        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-rc", 'getaccount ' + WALLET_ADDR].run(retcode=None)
+        (echo[chain[1:3]] >> "last.log")()
+        x = re.search(r"^account balance is (\d+)ng$", chain[2],re.M)
+        if x:
+            BALANCE = int(x.group(1))
+            print("BALANCE = " + str(BALANCE))
+            return True
+    except Exception as error:
+        print(error, 'Failed on get_balance')
 
 class Cli(cli.Application):
     """Small utility to automate validator requests and get rewards as shown in
     https://test.ton.org/Validator-HOWTO.txt
     """
-    VERSION = "1.1"
+    VERSION = "1.2"
     def main(self):
         if not self.nested_command:
+            now = pendulum.now(tz='Europe/Kiev')
+            success=False
+            db = TinyDB('db.json')
+            iter=len(db)+1
             print("Current DIR:  " + DIR)
             print("Current FIFTPATH:  " + FIFTPATH)
             get_elector_address()
+            get_balance()
+            get_seqno(False)
             if compute_returned_stake():
                 get_seqno(False)
                 wallet_sign("1.", "recover-query.boc", "return-stake",False)
@@ -440,32 +449,58 @@ class Cli(cli.Application):
                     print("Sleep for 15 seconds to complete transaction")
                     time.sleep(15)     #Test how much time it takes for "seqno" to change
                     get_seqno(False)
-
-            get_election_time()
-            check_success()
-            make_keys()
-            make_keys_adnl()
-            validator_elect_req()
-            engine_console_sign()
-            validator_elect_sign()
-            get_seqno(True)
-            wallet_sign(STAKE, "validator-query.boc", "finish",True)
-            if sendfile("finish.boc",True):
-                write_success()
-                print("Sleep for 15 seconds to complete transaction")
-                time.sleep(15)
-                get_seqno(True)
-            print("-------------------------")
-            print("Variables : ")
-            print(START_ELECTION_PERIOD)
-            print(VAR_A)
-            print(VAR_B)
-            print(VAR_C)
-            print(VAR_D)
-            print(VAR_E)
-            print(MAX_FACTOR)
-            print(STAKE)
-            print("-------------------------")
+                    query=db.search(where('success')==True)[-1]['stake'] #get last stake amount where success is True
+                    if query:
+                        global REWARD
+                        REWARD=RETURNED_STAKE-query
+            if get_election_time():
+                if not check_success():
+                    make_keys()
+                    make_keys_adnl()
+                    validator_elect_req()
+                    engine_console_sign()
+                    validator_elect_sign()
+                    get_seqno(True)
+                    wallet_sign(STAKE, "validator-query.boc", "finish",True)
+                    if sendfile("finish.boc",True):
+                        write_success()
+                        success=True
+                        print("Sleep for 15 seconds to complete transaction")
+                        time.sleep(15)
+                        get_seqno(True)
+                    ''' #Uncomment to see variables in stdout
+                    print("-------------------------\n"
+                    "Variables : \n"
+                    START_ELECTION_PERIOD \n
+                    VAR_A \n
+                    VAR_B \n
+                    VAR_C \n
+                    VAR_D \n
+                    VAR_E \n
+                    MAX_FACTOR \n
+                    STAKE \n
+                    "-------------------------")
+                    '''
+            stake=int(STAKE)*1000000000 #We scale all values to nanograms
+            max_factor=int(MAX_FACTOR)
+            db.insert({
+                'id': iter,
+                'time': now.int_timestamp,
+                'election_time': START_ELECTION_PERIOD,
+                'balance': BALANCE,
+                'seqno': CURRENT_SEQNO,
+                'returned': RETURNED_STAKE,
+                'stake':stake,
+                'reward':REWARD,
+                'max_factor': max_factor,
+                'success': success,
+                'A':VAR_A,
+                'B':VAR_B,
+                'C':VAR_C,
+                'D':VAR_D,
+                'E':VAR_E,
+                'elector':ELECTOR_ADDR
+              })
             #return 1   # error exit code
 
 if __name__ == "__main__":
