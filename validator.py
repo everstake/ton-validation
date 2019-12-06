@@ -1,12 +1,9 @@
 #!/usr/bin/env python
-from plumbum import local, cli, FG, BG, TF,TEE, ProcessExecutionError, colors
-from plumbum.cmd import cat,grep,sed,ls,echo
+import os, sys, re, time
+from plumbum import local, cli, FG, BG, TF, TEE, ProcessExecutionError, colors
+from plumbum.cmd import echo
 from contextlib import contextmanager
-import os
-import sys
-import re
 from tinydb import TinyDB, Query, where
-import time
 import pendulum
 from loguru import logger
 '''python --version
@@ -20,23 +17,22 @@ python3 -m venv env
 if you use bash -> source env/bin/activate
 pip install -r requirements.txt
 '''
-FIFTPATH = local.env["FIFTPATH"]
 
-#you can connect to external interfaces IP:9300 or localhost
+# you can connect to external interfaces IP:9300 or localhost
 CONNECT_STR_LITE_CLIENT = "127.0.0.1:9300"
 CONNECT_STR_ENGINE_CONSOLE = "127.0.0.1:9200"
 
 # wallet address = -1:36c519c430b548944972aed18cb5c94dff832fc4324b7340bb50cfcfc440e485
 # Bounceable address (for later access)
-WALLET_ADDR = "kf82xRnEMLVIlElyrtGMtclN_4MvxDJLc0C7UM_PxEDkhV-B"
+WALLET_ADDR = "kf9cXSD9NCO2C56Yda3Lv8E5t-pgq75OOe1MKlgt50u2aQts"
 
 # wallet address = -1:36c519c430b548944972aed18cb5c94dff832fc4324b7340bb50cfcfc440e485
 # address for compute_returned_stake
-WALLET_ADDR_C = "36c519c430b548944972aed18cb5c94dff832fc4324b7340bb50cfcfc440e485"
+WALLET_ADDR_C = "5c5d20fd3423b60b9e9875adcbbfc139b7ea60abbe4e39ed4c2a582de74bb669"
 
 # Wallet filename  wallet_03_10_2019.addr
 # in basename - without ext
-WALLET_FILENAME = "wallet_03_10_2019"
+WALLET_FILENAME = "wallet_19_11_2019"
 
 BALANCE = -1
 
@@ -53,13 +49,13 @@ REWARD = -1
 START_ELECTION_PERIOD = -1
 
 # START_ELECTION_PERIOD + 1 DAY
-END_ELECTION_PERIOD = 0 
+END_ELECTION_PERIOD = 0
 
-#maximal stake factor with respect to the minimal stake 176947/65536 = 2.7
-MAX_FACTOR = "5"
+# maximal stake factor with respect to the minimal stake 176947/65536 = 2.7
+MAX_FACTOR = "10"
 
-#Stake amount + extra 1 GRAM to cover fee
-STAKE = "100001"
+# Stake amount + extra 1 GRAM to cover fee
+STAKE = "10001"
 
 # newkey
 VAR_A = ""
@@ -80,111 +76,139 @@ VAR_D = ""
 # got signature
 VAR_E = ""
 
-#Assign executables found in current dir
-DIR = local.path(__file__) / '..'
-fift = local[DIR / 'fift']
-liteclient = local[DIR / 'lite-client']
-validatorengine = local[DIR / 'validator-engine-console']
+# validator public key
+# lite-client getconfig 34 - current validators
+# public_key: ed25519_pubkey pubkey:xVAL_PUBKEY
+VAL_PUBKEY = ""
+
+# Logfile that stores general messeges + some of exceptions
+# PWD / G_LOGFILE
+G_LOGFILE = "last.log"
+
+# Logfile that stores messages about things related to specific elections
+# PWD / ELECTION_DIR / E_LOGFILE
+E_LOGFILE = "log.log"
 
 def check_env():
-    '''check env for FIFTPATH'''
-    pass
+    '''set env and executables'''
+    #global FIFTPATH
+    global DIR
+    global fift
+    global liteclient
+    global validatorengine
+    try:
+        FIFTPATH = local.env["FIFTPATH"]
+        if FIFTPATH:
+            logger_general.info("Current FIFTPATH:  " + FIFTPATH)
+
+        # Assign executables found in current dir
+        DIR = local.path(__file__) / '..'   #PWD
+        logger_general.info("Current DIR:  " + DIR)
+        fift = local[DIR / 'fift']
+        liteclient = local[DIR / 'lite-client']
+        validatorengine = local[DIR / 'validator-engine-console']
+    except Exception as error:
+        logger_general.opt(exception=True).debug('Failed on check_env')
+        sys.exit()
 
 def get_elector_address():
     '''get_elector_address then parse it'''
     global ELECTOR_ADDR
-    print("Getting ELECTOR_ADDR...")
+    logger_general.info("Getting ELECTOR_ADDR...")
     try:
-        #lite-client -a IP:9300 -p liteserver.pub -rc ' getconfig 1'
+        # lite-client -a IP:9300 -p liteserver.pub -t 0.1 -rc ' getconfig 1'
         # change .run to  & TEE(retcode = None) to execute command and output to stdout
-        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-rc", 'getconfig 1'].run(retcode=None)
-        now = pendulum.now(tz='Europe/Kiev')
-        (echo[now.to_datetime_string()] >> "last.log")()
-        (echo[chain[1:3]] >> "last.log")()
-        x = re.search(r"elector_addr:x[0-9a-fA-F]{64}", chain[2])
+        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-t", "0.1", "-rc", 'getconfig 1'].run(retcode=None)
+        (echo[chain[1:3]] >> G_LOGFILE)()
+        x = re.search(r"elector_addr:x([0-9a-fA-F]{64})", chain[2])
         if x:
-            y = re.search(r"[0-9a-fA-F]{64}", x.group())
-            ELECTOR_ADDR = y.group()
-            print("ELECTOR_ADDR = " + ELECTOR_ADDR)
+            ELECTOR_ADDR = x.group(1)
+            logger_general.info("ELECTOR_ADDR = " + ELECTOR_ADDR)
             return True
         else:
-            print("Some error on get_elector_address")
+            logger_general.error("Some kind of error, maybe no elector found!")
             return False
     except Exception as error:
-        print(error, 'Failed on get_elector_address')
+        logger_general.opt(exception=True).debug('Failed on get_elector_address')
+        sys.exit()
 
 def get_election_time():
     '''get_election_time then parse it'''
     global START_ELECTION_PERIOD
     global END_ELECTION_PERIOD
     global ELECTION_DIR
-    print("Getting ELECTION_TIME...")
+    logger_general.info("Getting ELECTION_TIME...")
     try:
-        #lite-client -a IP:9300 -p liteserver.pub -rc 'runmethod -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 active_election_id'
-        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-rc", 'runmethod -1:' + ELECTOR_ADDR + ' active_election_id'].run(retcode=None)
+        #lite-client -a IP:9300 -p liteserver.pub -t 0.1 -rc 'runmethod -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 active_election_id'
+        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-t", "0.1", "-rc", 'runmethod -1:' + ELECTOR_ADDR + ' active_election_id'].run(retcode=None)
         x = re.search(r"result:\s\s\[\s\d+\s\]", chain[2])
         WORK_TIME = 1571749200 #Tuesday, October 22, 2019 4:00:00 PM GMT+03:00
         if x:
             y = re.search(r"\d+", x.group())
             START_ELECTION_PERIOD = int(y.group())
             if (START_ELECTION_PERIOD > WORK_TIME ):
-                print("START_ELECTION_PERIOD = " + str(START_ELECTION_PERIOD))
-                END_ELECTION_PERIOD = START_ELECTION_PERIOD+86400
+                END_ELECTION_PERIOD = START_ELECTION_PERIOD+172800 # 2days
                 p = local.path(DIR / "ELECTION_DIR" / str(START_ELECTION_PERIOD))
                 if p.exists():
-                    print(p+" Already exists!")
+                    logger_general.info(p+" Already exists!")
                 else:
                     p.mkdir()
-                    print(p+" Created this dir!")
+                    logger_general.info(p+" Created this dir!")
                 ELECTION_DIR = p
-                now = pendulum.now(tz='Europe/Kiev')
-                (echo[now.to_datetime_string()] >> p / "log.log")()
-                (echo[chain[1:3]] >> p / "log.log")()
+
+                logger.add(ELECTION_DIR / E_LOGFILE, backtrace=True, diagnose=True, filter=lambda record: record["extra"].get("name") == "elections")
+                global logger_elections
+                logger_elections = logger.bind(name="elections")
+                logger_elections.info("START_ELECTION_PERIOD = " + str(START_ELECTION_PERIOD))
+
+                (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
                 return True
             else:
-                print("START_ELECTION_PERIOD = 0, exiting...")
+                (echo[chain[1:3]] >> G_LOGFILE)()
+                logger_general.info("START_ELECTION_PERIOD = 0, exiting...")
         else:
-            print("Some kind of error")
+            logger_general.error("Some kind of error")
             return False
     except Exception as error:
-        print(error, 'Failed on get_election_time')
+        logger_general.opt(exception=True).debug("Failed on get_election_time")
 
 def get_seqno(q):
     '''get_seqno then parse it'''
     global CURRENT_SEQNO
-    print("Getting CURRENT_SEQNO...")
+    logger_general.info("Getting CURRENT_SEQNO...")
     try:
-        #lite-client -a IP:9300 -p liteserver.pub -rc 'runmethod kf82xRnEMLVIlElyrtGMtclN_4MvxDJLc0C7UM_PxEDkhV-B seqno'
-        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-rc", 'runmethod ' + WALLET_ADDR + ' seqno'].run(retcode=None)
-        if q:
-            (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
-        else:
-            (echo[chain[1:3]] >> "last.log")()
-        x = re.search(r"result:\s\s\[\s\d+\s\]", chain[2])
-        if x:
-            y = re.search(r"\d+", x.group())
-            CURRENT_SEQNO = int(y.group())
-            #LAST_SEQNO = local.env["LAST_SEQNO"]
-            #print ( "LAST_SEQNO was : " + LAST_SEQNO)
-
-            print("CURRENT_SEQNO = " + str(CURRENT_SEQNO))
-            #local.env["LAST_SEQNO"] = CURRENT_SEQNO
-            #return CURRENT_SEQNO
+        #lite-client -a IP:9300 -p liteserver.pub -t 0.1 -rc 'runmethod kf82xRnEMLVIlElyrtGMtclN_4MvxDJLc0C7UM_PxEDkhV-B seqno'
+        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-t", "0.1", "-rc", 'runmethod ' + WALLET_ADDR + ' seqno'].run(retcode=None)
+        x = re.search(r"result:\s\s\[\s(\d+)\s\]", chain[2])
+        if ( q and x):
+            (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+            CURRENT_SEQNO = int(x.group(1))
+            logger_elections.info("CURRENT_SEQNO = " + str(CURRENT_SEQNO))
+        elif ( not q and x):
+            (echo[chain[1:3]] >> G_LOGFILE)()
+            CURRENT_SEQNO = int(x.group(1))
+            logger_general.info("CURRENT_SEQNO = " + str(CURRENT_SEQNO))
+        elif ( q and not x):
+            (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+            logger_elections.error("Some kind of error with get_seqno")
+        elif ( not q and not x):
+            (echo[chain[1:3]] >> G_LOGFILE)()
+            logger_general.error("Some kind of error with get_seqno")
     except Exception as error:
-        print(error, 'Failed on get_seqno')
+        logger_general.opt(exception=True).debug("Failed on get_seqno")
 
 def check_success():
     '''check_success '''
     try:
         p = local.path(ELECTION_DIR / "success" )
         if p.is_file():
-            print(p+" Success file already exists, so -> quit")
+            logger_elections.info(p+" Success file already exists, so -> quit")
             return True
         else:
-            print("Success file doesn't exist, so -> continue")
+            logger_elections.info("Success file doesn't exist, so -> continue")
             return False
     except Exception as error:
-        print(error, 'Failed on check_success')
+        logger_elections.opt(exception=True).debug("Failed on check_success")
 
 def write_success():
     '''write success file to prevent duplicates'''
@@ -192,267 +216,263 @@ def write_success():
         p = local.path(ELECTION_DIR / "success" )
         p.touch()
         if p.is_file():
-            print("Success file created!")
+            logger_elections.success("Success file created!")
         else:
-            print("Some kind of error")
-            return
+            logger_elections.error("Some kind of error!")
     except Exception as error:
-        print(error, 'Failed on write_success')
+        logger_elections.opt(exception=True).debug("Failed on write_success")
 
 def make_keys():
     '''make perm and temp keys'''
-    print("")
     global VAR_A
     global VAR_B
-    global ELECTION_DIR
-    print("Making keys...")
+    logger_elections.info("Making keys...")
     try:
-        #validator-engine-console -a IP:9200 -k client -p server.pub -rc 'newkey'
-        chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-rc", "newkey"].run(retcode=None)
-        #(echo[chain[1:3]] >> "log.log")()
-        (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
-        w = re.search(r"created new key [0-9a-fA-F]{64}", chain[2])
-        #print(w.group())
-        VAR_A = re.search(r"[0-9a-fA-F]{64}", w.group())
-        VAR_A = VAR_A.group()
-        print("VAR_A = " + VAR_A)
+        #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'newkey'
+        chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", "newkey"].run(retcode=None)
+        (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+        w = re.search(r"created new key ([0-9a-fA-F]{64})", chain[2])
+        if w:
+            VAR_A = w.group(1)
+            logger_elections.info("VAR_A = " + VAR_A)
+        else:
+            logger_elections.error("Some kind of error with VAR_A")
 
-        #validator-engine-console -a IP:9200 -k client -p server.pub -rc 'exportpub VAR_A'
-        chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-rc", 'exportpub '+ VAR_A].run(retcode=None)
-        (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
+        #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'exportpub VAR_A'
+        chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'exportpub '+ VAR_A].run(retcode=None)
+        (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
         #re.M to match end of string $
-        x = re.search(r"got public key:\s.{48}$", chain[2], re.M)
-        VAR_B = re.search(r"got public key:\s(.{48})$", x.group(),re.M)
-        VAR_B = VAR_B.group(1)
-        print("VAR_B = " + VAR_B)
+        x = re.search(r"got public key:\s(.{48})$", chain[2], re.M)
+        if x:
+            VAR_B = x.group(1)
+            logger_elections.info("VAR_B = " + VAR_B)
+        else:
+            logger_elections.error("Some kind of error with VAR_B")
 
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'addpermkey VAR_A START_ELECTION_PERIOD END_ELECTION_PERIOD'
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'addpermkey '+VAR_A+' '+str(START_ELECTION_PERIOD)+' '+ str(END_ELECTION_PERIOD)].run(retcode=None)
-        (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
-        #re.M to match start of string ^
-        y = re.search(r"success", chain[2], re.M)
-        #print(y.group())
-        #print(y[0] if y else 'Not found')
+        (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+        y = re.search(r"success", chain[2])
         if y:
-            print("Success = "+y.group())
+            logger_elections.info("addpermkey")
         else:
-            print("Maybe error on addpermkey")
+            logger_elections.error("Some kind of error with addpermkey")
 
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'addtempkey VAR_A VAR_A END_ELECTION_PERIOD'
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'addtempkey '+VAR_A+' '+VAR_A+' '+str(END_ELECTION_PERIOD)].run(retcode=None)
-        #print(chain)
-        (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
-        #re.M to match start of string ^
-        z = re.search(r"success", chain[2], re.M)
-        #print(z.group())
-        #print(z[0] if y else 'Not found')
+        (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+        z = re.search(r"success", chain[2])
         if z:
-            print("Success = "+z.group())
+            logger_elections.info("addtempkey")
         else:
-            print("Maybe error on addtempkey")
-            #return
+            logger_elections.error("Some kind of error with addtempkey")
     except Exception as error:
-        print(error, 'Failed on make_keys')
+        logger_elections.opt(exception=True).debug("Failed on make_keys")
 
 def make_keys_adnl():
     '''make adnl keys'''
     global VAR_C
-    global ELECTION_DIR
-    print("Making ADNL keys...")
+    logger_elections.info("Making ADNL keys...")
     try:
-        #validator-engine-console -a IP:9200 -k client -p server.pub -rc 'newkey'
-        chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-rc", 'newkey'].run(retcode=None)
-        (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
-        w = re.search(r"created new key [0-9a-fA-F]{64}", chain[2])
-        #print(w.group())
-        VAR_C = re.search(r"[0-9a-fA-F]{64}", w.group())
-        VAR_C = VAR_C.group()
-        print("VAR_C = " + VAR_C)
+        #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'newkey'
+        chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'newkey'].run(retcode=None)
+        (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+        w = re.search(r"created new key ([0-9a-fA-F]{64})", chain[2])
+        if w:
+            VAR_C = w.group(1)
+            logger_elections.info("VAR_C = " + VAR_C)
+        else:
+            logger_elections.error("Some kind of error with VAR_C")
 
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'addadnl VAR_C 0'
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'addadnl '+VAR_C+' 0'].run(retcode=None)
-        #print(chain)
-        (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
-        #re.M to match end of string $
-        x = re.search(r"success", chain[2], re.M)
-        #print(x.group())
+        (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+        x = re.search(r"success", chain[2])
         if x:
-            print("Success = "+x.group())
+            logger_elections.info("addadnl")
         else:
-            print("Maybe error on addadnl")
-            #return
+            logger_elections.error("Some kind of error with addadnl")
 
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'addvalidatoraddr VAR_A VAR_C END_ELECTION_PERIOD'
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'addvalidatoraddr '+VAR_A+" "+VAR_C+" "+str(END_ELECTION_PERIOD)].run(retcode=None)
-        #print(chain)
-        (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
-        #re.M to match end of string $
-        y = re.search(r"success", chain[2], re.M)
-        #print(y.group())
+        (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+        y = re.search(r"success", chain[2])
         if y:
-            print("Success = "+y.group())
+            logger_elections.info("addvalidatoraddr")
         else:
-            print("Maybe error on addvalidatoraddr")
-            #return
+            logger_elections.error("Some kind of error with addvalidatoraddr")
     except Exception as error:
-        print(error, 'Failed on make_keys_adnl')
+        logger_elections.opt(exception=True).debug("Failed on make_keys_adnl")
 
 def validator_elect_req():
     '''fift validator-elect-req'''
     global VAR_D
-    print("Making validator request...")
+    logger_elections.info("Making validator request...")
     try:
         #fift  -s validator-elect-req.fif WALLET_ADDR  START_ELECTION_PERIOD MAX_FACTOR VAR_C [<validator-to-sign>] ==>>  validator-to-sign.bin
         chain = fift ["-s", "validator-elect-req.fif", WALLET_ADDR, str(START_ELECTION_PERIOD), MAX_FACTOR, VAR_C].run(retcode=None)
-        (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
-        w = re.search(r"^[0-9A-F]+$", chain[1],re.M)
+        (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+        w = re.search(r"^([0-9A-F]+)$", chain[1],re.M)
         if w:
-            VAR_D = w.group()
-            print("VAR_D = " + VAR_D)
-
+            VAR_D = w.group(1)
+            logger_elections.info("VAR_D = " + VAR_D)
+        else:
+            logger_elections.error("Some kind of error with validator_elect_req")
     except Exception as error:
-        print(error, 'Failed on validator_elect_req')
-
+        logger_elections.opt(exception=True).debug("Failed on validator_elect_req")
 
 def engine_console_sign():
     '''validator-engine-console sign VAR_A VAR_D'''
     global VAR_E
-    print("Validator-engine-console sign...")
+    logger_elections.info("Validator-engine-console sign...")
     try:
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'sign VAR_A VAR_D'
         SIGN_STR = 'sign '+VAR_A+" "+ VAR_D
         #use additional [ ] for normal brakets escaping 
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", [SIGN_STR] ].run(retcode=None)
-        #print(chain)
-        (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
+        (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
         #re.M to match end of string $
         x = re.search(r"^got signature\s(.+)$", chain[2],re.M)
         if x:
             VAR_E = x.group(1)
-            print("VAR_E = " + VAR_E)
+            logger_elections.info("VAR_E = " + VAR_E)
         else:
-            print("Maybe error on engine_console_sign")
+            logger_elections.error("Some kind of error with engine_console_sign")
     except Exception as error:
-        print(error, 'Failed on engine_console_sign')
+        logger_elections.opt(exception=True).debug("Failed on engine_console_sign")
 
 def validator_elect_sign():
     '''fift validator-elect-signed'''
-    print("Signing validator request...")
+    global VAL_PUBKEY
+    logger_elections.info("Signing validator request...")
     try:
         #fift  -s validator-elect-signed.fif WALLET_ADDR  START_ELECTION_PERIOD MAX_FACTOR VAR_C VAR_B VAR_E [<validator-query>] ==>>  validator-query.boc
         chain = fift ["-s", "validator-elect-signed.fif", WALLET_ADDR, str(START_ELECTION_PERIOD), MAX_FACTOR, VAR_C, VAR_B, VAR_E].run(retcode=None)
-        #print(chain)
-        (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
-        w = re.search(r"^[0-9A-F]+$", chain[1],re.M)
-        if w:
-            VAR_D = w.group()
-            print("VAR_D = " + VAR_D)
+        (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+        x = re.search(r"with validator public key ([0-9a-fA-F]{64})$", chain[1],re.M)
+        if x:
+            VAL_PUBKEY = x.group(1)
+            logger_elections.info("VAL_PUBKEY = " + VAL_PUBKEY)
+        else:
+            logger_elections.error("Some kind of error with VAL_PUBKEY")
     except Exception as error:
-        print(error, 'Failed on validator_elect_sign')
+        logger_elections.opt(exception=True).debug("Failed on validator_elect_sign")
 
 def wallet_sign(amount, in_file, out_file, q):
     '''fift wallet.fif'''
-    print("Signing request with our wallet...")
+    logger_elections.info("Signing request with our wallet...")
     try:
         #fift -s wallet.fif wallet_03_10_2019 -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 seqno amount -B query.boc [<wallet-query>] ==>>  wallet-query.boc
         chain = fift ["-s", "wallet.fif", WALLET_FILENAME, "-1:"+ELECTOR_ADDR, str(CURRENT_SEQNO), amount, "-B", in_file, out_file].run(retcode=None)
-        #print(chain)
-        if q:
-            (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
-        else:
-            (echo[chain[1:3]] >> "last.log")()
         w = re.search(r"Saved to file", chain[1],re.I)
-        if w:
-            print("Generated "+out_file+" file")
-        else:
-            print("Some kind of error")
+        if ( q and w):
+            (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+            logger_elections.info("Generated "+out_file+" file")
+            return True
+        elif ( not q and w):
+            (echo[chain[1:3]] >> G_LOGFILE)()
+            logger_elections.info("Generated "+out_file+" file")
+            return True
+        elif ( q and not w):
+            (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+            logger_elections.error("Some kind of error with wallet_sign")
+        elif ( not q and not w):
+            (echo[chain[1:3]] >> G_LOGFILE)()
+            logger_general.error("Some kind of error with wallet_sign")
     except Exception as error:
-        print(error, 'Failed on wallet_sign')
+        logger_general.opt(exception=True).debug("Failed on wallet_sign")
 
 def sendfile(f, q):
     '''liteclient sendfile'''
-    print("Sending finish.boc to blockchain...")
+    logger_general.info("Sending "+f+" to blockchain...")
     try:
-        #lite-client -a IP:9300 -p liteserver.pub -rc ' sendfile validator-query-send.boc'
-        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-rc", 'sendfile '+f].run(retcode=None)
-        if q:
-            (echo[chain[1:3]] >> ELECTION_DIR / "log.log")()
-        else:
-            (echo[chain[1:3]] >> "last.log")()
+        #lite-client -a IP:9300 -p liteserver.pub -t 0.1 -rc ' sendfile validator-query-send.boc'
+        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-t", "0.1", "-rc", 'sendfile '+f].run(retcode=None)
         x = re.search(r"sending query from file", chain[2])
-        if x:
-            print("Sendfile is OK")
-            #result = x.group()
+        if ( q and x):
+            (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+            logger_elections.info("Sent "+f+" to blockchain")
             return True
-        else:
-            print("Some kind of error")
+        elif ( not q and x):
+            (echo[chain[1:3]] >> G_LOGFILE)()
+            logger_general.info("Sent "+f+" to blockchain")
+            return True
+        elif ( q and not x):
+            (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+            logger_elections.error("Some kind of error with sendfile")
+        elif ( not q and not x):
+            (echo[chain[1:3]] >> G_LOGFILE)()
+            logger_general.error("Some kind of error with sendfile")
     except Exception as error:
-        print(error, 'Failed on sendfile')
+        logger_general.opt(exception=True).debug("Failed on sendfile")
 
 def compute_returned_stake():
     '''compute_returned_stake then parse it'''
     global RETURNED_STAKE
-    print("Running compute_returned_stake...")
+    logger_general.info("Running compute_returned_stake...")
     try:
-        #lite-client -a IP:9300 -p liteserver.pub -rc ' runmethod -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 compute_returned_stake 0x36c519c430b548944972aed18cb5c94dff832fc4324b7340bb50cfcfc440e485'
-        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-rc", 'runmethod -1:' + ELECTOR_ADDR + ' compute_returned_stake 0x'+WALLET_ADDR_C].run(retcode=None)
-        (echo[chain[1:3]] >> "last.log")()
-        x = re.search(r"result:\s\s\[\s\d+\s\]", chain[2])
+        #lite-client -a IP:9300 -p liteserver.pub -t 0.1 -rc ' runmethod -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 compute_returned_stake 0x36c519c430b548944972aed18cb5c94dff832fc4324b7340bb50cfcfc440e485'
+        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-t", "0.1", "-rc", 'runmethod -1:' + ELECTOR_ADDR + ' compute_returned_stake 0x'+WALLET_ADDR_C].run(retcode=None)
+        (echo[chain[1:3]] >> G_LOGFILE)()
+        x = re.search(r"result:\s\s\[\s(\d+)\s\]", chain[2])
         if x:
-            y = re.search(r"\d+", x.group())
-            RETURNED_STAKE = int(y.group())
+            RETURNED_STAKE = int(x.group(1))
             if (RETURNED_STAKE > 0):
-                print("RETURNED_STAKE = " + str(RETURNED_STAKE))
+                logger_general.info("RETURNED_STAKE = " + str(RETURNED_STAKE))
                 return True
             else:
-                print("RETURNED_STAKE = 0")
+                logger_general.info("RETURNED_STAKE = 0")
                 return False
     except Exception as error:
-        print(error, 'Failed on compute_returned_stake')
+        logger_general.opt(exception=True).debug("Failed on compute_returned_stake")
 
 def get_balance():
     '''get_balance then parse it'''
     global BALANCE
-    print("Getting balance...")
+    logger_general.info("Getting balance...")
     try:
-        #lite-client -a IP:9300 -p liteserver.pub -rc ' getaccount WALLET_ADDR'
-        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-rc", 'getaccount ' + WALLET_ADDR].run(retcode=None)
-        (echo[chain[1:3]] >> "last.log")()
+        #lite-client -a IP:9300 -p liteserver.pub -t 0.1 -rc ' getaccount WALLET_ADDR'
+        chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-t", "0.1", "-rc", 'getaccount ' + WALLET_ADDR].run(retcode=None)
+        (echo[chain[1:3]] >> G_LOGFILE)()
         x = re.search(r"^account balance is (\d+)ng$", chain[2],re.M)
         if x:
             BALANCE = int(x.group(1))
-            print("BALANCE = " + str(BALANCE))
+            logger_general.info("BALANCE = " + str(BALANCE))
             return True
     except Exception as error:
-        print(error, 'Failed on get_balance')
+        logger_general.opt(exception=True).debug("Failed on get_balance")
 
 class Cli(cli.Application):
     """Small utility to automate validator requests and get rewards as shown in
     https://test.ton.org/Validator-HOWTO.txt
     """
-    VERSION = "1.2"
+    VERSION = "1.3"
     def main(self):
         if not self.nested_command:
-            now = pendulum.now(tz='Europe/Kiev')
+            logger.add(G_LOGFILE, backtrace=True, diagnose=True, filter=lambda record: record["extra"].get("name") == "general")
+            global logger_general
+            logger_general = logger.bind(name="general")
+
+            now = pendulum.now()
             success=False
             db = TinyDB('db.json')
             iter=len(db)+1
-            print("Current DIR:  " + DIR)
-            print("Current FIFTPATH:  " + FIFTPATH)
-            get_elector_address()
+            logger_general.info("Starting script, iter = "+str(iter))
+            check_env()
             get_balance()
             get_seqno(False)
+            if not get_elector_address():
+                sys.exit() # Exit when there is no elector found, cause we can't do anything
             if compute_returned_stake():
-                get_seqno(False)
-                wallet_sign("1.", "recover-query.boc", "return-stake",False)
-                if sendfile("return-stake.boc",False):
-                    print("Sleep for 15 seconds to complete transaction")
-                    time.sleep(15)     #Test how much time it takes for "seqno" to change
-                    get_seqno(False)
-                    query=db.search(where('success')==True)[-1]['stake'] #get last stake amount where success is True
-                    if query:
-                        global REWARD
-                        REWARD=RETURNED_STAKE-query
+                if wallet_sign("1.", "recover-query.boc", "return-stake",False) :
+                    if sendfile("return-stake.boc",False):
+                        logger_general.info("Sleep for 15 seconds to complete transaction")
+                        time.sleep(15)     #Test how much time it takes for "seqno" to change
+                        get_seqno(False)
+                        query=db.search(where('success')==True)[-2]['stake'] #get penultimate stake amount where success is True
+                        if query:
+                            global REWARD
+                            REWARD=RETURNED_STAKE-query
             if get_election_time():
                 if not check_success():
                     make_keys()
@@ -461,26 +481,13 @@ class Cli(cli.Application):
                     engine_console_sign()
                     validator_elect_sign()
                     get_seqno(True)
-                    wallet_sign(STAKE, "validator-query.boc", "finish",True)
-                    if sendfile("finish.boc",True):
-                        write_success()
-                        success=True
-                        print("Sleep for 15 seconds to complete transaction")
-                        time.sleep(15)
-                        get_seqno(True)
-                    ''' #Uncomment to see variables in stdout
-                    print("-------------------------\n"
-                    "Variables : \n"
-                    START_ELECTION_PERIOD \n
-                    VAR_A \n
-                    VAR_B \n
-                    VAR_C \n
-                    VAR_D \n
-                    VAR_E \n
-                    MAX_FACTOR \n
-                    STAKE \n
-                    "-------------------------")
-                    '''
+                    if wallet_sign(STAKE, "validator-query.boc", "finish",True) :
+                        if sendfile("finish.boc",True):
+                            write_success()
+                            success=True
+                            logger_elections.info("Sleep for 15 seconds to complete transaction")
+                            time.sleep(15)
+                            get_seqno(True)
             stake=int(STAKE)*1000000000 #We scale all values to nanograms
             max_factor=int(MAX_FACTOR)
             db.insert({
@@ -499,9 +506,9 @@ class Cli(cli.Application):
                 'C':VAR_C,
                 'D':VAR_D,
                 'E':VAR_E,
+                'validator_pubkey':VAL_PUBKEY,
                 'elector':ELECTOR_ADDR
               })
             #return 1   # error exit code
-
 if __name__ == "__main__":
     Cli.run()
