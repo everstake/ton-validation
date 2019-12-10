@@ -360,10 +360,10 @@ def validator_elect_sign():
 
 def wallet_sign(amount, in_file, out_file, q):
     '''fift wallet.fif'''
-    logger_elections.info("Signing request with our wallet...")
+    logger_general.info("Signing request with our wallet...")
     try:
-        #fift -s wallet.fif wallet_03_10_2019 -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 seqno amount -B query.boc [<wallet-query>] ==>>  wallet-query.boc
-        chain = fift ["-s", "wallet.fif", WALLET_FILENAME, "-1:"+ELECTOR_ADDR, str(CURRENT_SEQNO), amount, "-B", in_file, out_file].run(retcode=None)
+        #fift -s wallet.fif wallet_19_11_2019 -B query.boc -- -1:3333333333333333333333333333333333333333333333333333333333333333 seqno amount [<wallet-query>] ==>>  wallet-query.boc
+        chain = fift ["-s", "wallet.fif", WALLET_FILENAME,  "-B", in_file, "--", "-1:"+ELECTOR_ADDR, str(CURRENT_SEQNO), amount, out_file].run(retcode=None)
         w = re.search(r"Saved to file", chain[1],re.I)
         if ( q and w):
             (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
@@ -371,7 +371,7 @@ def wallet_sign(amount, in_file, out_file, q):
             return True
         elif ( not q and w):
             (echo[chain[1:3]] >> G_LOGFILE)()
-            logger_elections.info("Generated "+out_file+" file")
+            logger_general.info("Generated "+out_file+" file")
             return True
         elif ( q and not w):
             (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
