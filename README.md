@@ -2,7 +2,7 @@
 Please refer to [Validator HOWTO Guide](https://test.ton.org/Validator-HOWTO.txt)
 
 #### WARNING! Highly experimental. Use at your own risk!
-Tested on Ubuntu 18.04, using [this commit](https://github.com/ton-blockchain/ton/commit/b6f6788532138f6c35d6fbbca5c73667124df3fb).
+Tested on Ubuntu 18.04, using [this commit](https://github.com/ton-blockchain/ton/commit/ba76f1404ef06b044fcbdc2d35a5ac7b7d01cad0).
 
 > Please backup and remove your db.json to start with a clean one before running v1.3
 

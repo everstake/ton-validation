@@ -55,7 +55,7 @@ END_ELECTION_PERIOD = 0
 MAX_FACTOR = "10"
 
 # Stake amount + extra 1 GRAM to cover fee
-STAKE = "10001"
+STAKE = "30001"
 
 # newkey
 VAR_A = ""
@@ -67,7 +67,7 @@ VAR_B = ""
 VAR_C = ""
 
 # validator-elect-req.fif
-# loooooong string in HEX 
+# loooooong string in HEX
 # string to sign
 VAR_D = ""
 
@@ -120,7 +120,7 @@ def get_elector_address():
         # change .run to  & TEE(retcode = None) to execute command and output to stdout
         chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-t", "0.1", "-rc", 'getconfig 1'].run(retcode=None)
         (echo[chain[1:3]] >> G_LOGFILE)()
-        x = re.search(r"elector_addr:x([0-9a-fA-F]{64})", chain[2])
+        x = re.search(r"elector_addr:x([0-9a-fA-F]{64})", chain[1])
         if x:
             ELECTOR_ADDR = x.group(1)
             logger_general.info("ELECTOR_ADDR = " + ELECTOR_ADDR)
@@ -141,7 +141,7 @@ def get_election_time():
     try:
         #lite-client -a IP:9300 -p liteserver.pub -t 0.1 -rc 'runmethod -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 active_election_id'
         chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-t", "0.1", "-rc", 'runmethod -1:' + ELECTOR_ADDR + ' active_election_id'].run(retcode=None)
-        x = re.search(r"result:\s\s\[\s\d+\s\]", chain[2])
+        x = re.search(r"result:\s\s\[\s\d+\s\]", chain[1])
         WORK_TIME = 1571749200 #Tuesday, October 22, 2019 4:00:00 PM GMT+03:00
         if x:
             y = re.search(r"\d+", x.group())
@@ -179,7 +179,7 @@ def get_seqno(q):
     try:
         #lite-client -a IP:9300 -p liteserver.pub -t 0.1 -rc 'runmethod kf82xRnEMLVIlElyrtGMtclN_4MvxDJLc0C7UM_PxEDkhV-B seqno'
         chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-t", "0.1", "-rc", 'runmethod ' + WALLET_ADDR + ' seqno'].run(retcode=None)
-        x = re.search(r"result:\s\s\[\s(\d+)\s\]", chain[2])
+        x = re.search(r"result:\s\s\[\s(\d+)\s\]", chain[1])
         if ( q and x):
             (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
             CURRENT_SEQNO = int(x.group(1))
@@ -231,7 +231,7 @@ def make_keys():
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'newkey'
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", "newkey"].run(retcode=None)
         (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
-        w = re.search(r"created new key ([0-9a-fA-F]{64})", chain[2])
+        w = re.search(r"created new key ([0-9a-fA-F]{64})", chain[1])
         if w:
             VAR_A = w.group(1)
             logger_elections.info("VAR_A = " + VAR_A)
@@ -242,7 +242,7 @@ def make_keys():
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'exportpub '+ VAR_A].run(retcode=None)
         (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
         #re.M to match end of string $
-        x = re.search(r"got public key:\s(.{48})$", chain[2], re.M)
+        x = re.search(r"got public key:\s(.{48})$", chain[1], re.M)
         if x:
             VAR_B = x.group(1)
             logger_elections.info("VAR_B = " + VAR_B)
@@ -252,7 +252,7 @@ def make_keys():
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'addpermkey VAR_A START_ELECTION_PERIOD END_ELECTION_PERIOD'
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'addpermkey '+VAR_A+' '+str(START_ELECTION_PERIOD)+' '+ str(END_ELECTION_PERIOD)].run(retcode=None)
         (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
-        y = re.search(r"success", chain[2])
+        y = re.search(r"success", chain[1])
         if y:
             logger_elections.info("addpermkey")
         else:
@@ -261,7 +261,7 @@ def make_keys():
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'addtempkey VAR_A VAR_A END_ELECTION_PERIOD'
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'addtempkey '+VAR_A+' '+VAR_A+' '+str(END_ELECTION_PERIOD)].run(retcode=None)
         (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
-        z = re.search(r"success", chain[2])
+        z = re.search(r"success", chain[1])
         if z:
             logger_elections.info("addtempkey")
         else:
@@ -277,7 +277,7 @@ def make_keys_adnl():
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'newkey'
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'newkey'].run(retcode=None)
         (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
-        w = re.search(r"created new key ([0-9a-fA-F]{64})", chain[2])
+        w = re.search(r"created new key ([0-9a-fA-F]{64})", chain[1])
         if w:
             VAR_C = w.group(1)
             logger_elections.info("VAR_C = " + VAR_C)
@@ -287,7 +287,7 @@ def make_keys_adnl():
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'addadnl VAR_C 0'
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'addadnl '+VAR_C+' 0'].run(retcode=None)
         (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
-        x = re.search(r"success", chain[2])
+        x = re.search(r"success", chain[1])
         if x:
             logger_elections.info("addadnl")
         else:
@@ -296,7 +296,7 @@ def make_keys_adnl():
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'addvalidatoraddr VAR_A VAR_C END_ELECTION_PERIOD'
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", 'addvalidatoraddr '+VAR_A+" "+VAR_C+" "+str(END_ELECTION_PERIOD)].run(retcode=None)
         (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
-        y = re.search(r"success", chain[2])
+        y = re.search(r"success", chain[1])
         if y:
             logger_elections.info("addvalidatoraddr")
         else:
@@ -328,11 +328,11 @@ def engine_console_sign():
     try:
         #validator-engine-console -a IP:9200 -k client -p server.pub -t 0.1 -rc 'sign VAR_A VAR_D'
         SIGN_STR = 'sign '+VAR_A+" "+ VAR_D
-        #use additional [ ] for normal brakets escaping 
+        #use additional [ ] for normal brakets escaping
         chain = validatorengine ["-a", CONNECT_STR_ENGINE_CONSOLE, "-k", "client", "-p", "server.pub", "-t", "0.1", "-rc", [SIGN_STR] ].run(retcode=None)
         (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
         #re.M to match end of string $
-        x = re.search(r"^got signature\s(.+)$", chain[2],re.M)
+        x = re.search(r"^got signature\s(.+)$", chain[1],re.M)
         if x:
             VAR_E = x.group(1)
             logger_elections.info("VAR_E = " + VAR_E)
@@ -414,7 +414,7 @@ def compute_returned_stake():
         #lite-client -a IP:9300 -p liteserver.pub -t 0.1 -rc ' runmethod -1:C7EAFBC106A7AA4BA3D16007C6AC64CAAC1078B4A43577339E246F466405E896 compute_returned_stake 0x36c519c430b548944972aed18cb5c94dff832fc4324b7340bb50cfcfc440e485'
         chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-t", "0.1", "-rc", 'runmethod -1:' + ELECTOR_ADDR + ' compute_returned_stake 0x'+WALLET_ADDR_C].run(retcode=None)
         (echo[chain[1:3]] >> G_LOGFILE)()
-        x = re.search(r"result:\s\s\[\s(\d+)\s\]", chain[2])
+        x = re.search(r"result:\s\s\[\s(\d+)\s\]", chain[1])
         if x:
             RETURNED_STAKE = int(x.group(1))
             if (RETURNED_STAKE > 0):
@@ -434,7 +434,7 @@ def get_balance():
         #lite-client -a IP:9300 -p liteserver.pub -t 0.1 -rc ' getaccount WALLET_ADDR'
         chain = liteclient ["-a", CONNECT_STR_LITE_CLIENT, "-p", "liteserver.pub", "-t", "0.1", "-rc", 'getaccount ' + WALLET_ADDR].run(retcode=None)
         (echo[chain[1:3]] >> G_LOGFILE)()
-        x = re.search(r"^account balance is (\d+)ng$", chain[2],re.M)
+        x = re.search(r"^account balance is (\d+)ng$", chain[1],re.M)
         if x:
             BALANCE = int(x.group(1))
             logger_general.info("BALANCE = " + str(BALANCE))
