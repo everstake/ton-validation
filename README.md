@@ -17,6 +17,7 @@ Tested on Ubuntu 18.04, using [this commit](https://github.com/ton-blockchain/to
 * recover-query.boc which you can obtain by running (`fift -s recover-stake.fif`)
 * wallet smart contract in the masterchain (*-1 identifier*)
 * sufficient amount of Grams for validation purposes (20k will result in continuous process of validation in testnet)
+* [tonos-cli v0.1.29](https://github.com/tonlabs/tonos-cli/releases/tag/v0.1.29) - Tested to work
 
 
 ### Installation steps:
