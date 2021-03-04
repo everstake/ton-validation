@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from tinydb import TinyDB, Query, where
 import pendulum
 from loguru import logger
+import base64
 '''python --version
 Tested on Ubuntu 18.04 with Python 3.6.8
 set env variable in .bashrc file using export, here user=ton
@@ -19,8 +20,8 @@ pip install -r requirements.txt
 '''
 
 # you can connect to external interfaces IP:9300 or localhost
-CONNECT_STR_LITE_CLIENT = "127.0.0.1:9300"
-CONNECT_STR_ENGINE_CONSOLE = "127.0.0.1:9200"
+CONNECT_STR_LITE_CLIENT = "127.0.0.1:3031"
+CONNECT_STR_ENGINE_CONSOLE = "127.0.0.1:3030"
 
 # wallet address = -1:36c519c430b548944972aed18cb5c94dff832fc4324b7340bb50cfcfc440e485
 # Bounceable address (for later access)
@@ -30,9 +31,20 @@ WALLET_ADDR = "kf9cXSD9NCO2C56Yda3Lv8E5t-pgq75OOe1MKlgt50u2aQts"
 # address for compute_returned_stake
 WALLET_ADDR_C = "5c5d20fd3423b60b9e9875adcbbfc139b7ea60abbe4e39ed4c2a582de74bb669"
 
-# Wallet filename  wallet_03_10_2019.addr
+
+# For fift signing
+# Wallet addr filename  validator.addr
+# Wallet key  filename  validator.pk
+
+# For tonos-cli signing with multisig
+# Wallet addr filename  validator_1part.addr
+# Wallet addr filename  validator_1part.keys.json
+
 # in basename - without ext
 WALLET_FILENAME = "wallet_19_11_2019"
+
+# Use tonos-cli functions to sign and submit messages with msig keys
+USE_MSIG=True
 
 BALANCE = -1
 
@@ -52,10 +64,10 @@ START_ELECTION_PERIOD = -1
 END_ELECTION_PERIOD = 0
 
 # maximal stake factor with respect to the minimal stake 176947/65536 = 2.7
-MAX_FACTOR = "10"
+MAX_FACTOR = "3"
 
 # Stake amount + extra 1 GRAM to cover fee
-STAKE = "30001"
+STAKE = "300001"
 
 # newkey
 VAR_A = ""
@@ -96,6 +108,7 @@ def check_env():
     global fift
     global liteclient
     global validatorengine
+    global tonos
     try:
         FIFTPATH = local.env["FIFTPATH"]
         if FIFTPATH:
@@ -107,6 +120,7 @@ def check_env():
         fift = local[DIR / 'fift']
         liteclient = local[DIR / 'lite-client']
         validatorengine = local[DIR / 'validator-engine-console']
+        tonos = local[DIR / 'tonos-cli']
     except Exception as error:
         logger_general.opt(exception=True).debug('Failed on check_env')
         sys.exit()
@@ -382,6 +396,42 @@ def wallet_sign(amount, in_file, out_file, q):
     except Exception as error:
         logger_general.opt(exception=True).debug("Failed on wallet_sign")
 
+
+def wallet_sign_tonos(amount, in_file, q):
+    '''tonos-cli call MSIG_ADDR submitTransaction'''
+    logger_general.info("Signing request with our msig wallet...")
+    try:
+        with open(in_file, 'rb') as binary_file:
+            binary_file_data = binary_file.read()
+            base64_encoded_data = base64.b64encode(binary_file_data)
+            base64_message = base64_encoded_data.decode('utf-8')
+
+            if base64_message:  # this cathes ONLY that string is not empty (null)
+
+                x = re.search("^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)?$", base64_message) # cathes whitespaces and that it is possible to decode using base64
+                if x :
+                    chain = tonos ["callex", "submitTransaction", "-1:"+WALLET_ADDR_C, "SafeMultisigWallet.abi.json", WALLET_FILENAME+".keys.json", "--dest", "-1:"+ELECTOR_ADDR, "--value", amount+"T", "--bounce", "true", "--allBalance", "false", "--payload", base64_message].run(retcode=None,timeout=120)
+                    w = re.search(r"Succeeded", chain[1],re.I)
+
+                    if ( q and w):
+                        (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+                        logger_elections.info("Signed and sent "+in_file+" to the network")
+                        return True
+                    elif ( not q and w):
+                        (echo[chain[1:3]] >> G_LOGFILE)()
+                        logger_general.info("Signed and sent "+in_file+" to the network")
+                        return True
+                    elif ( q and not w):
+                        (echo[chain[1:3]] >> ELECTION_DIR / E_LOGFILE)()
+                        logger_elections.error("Some kind of error with wallet_sign_tonos")
+                    elif ( not q and not w):
+                        (echo[chain[1:3]] >> G_LOGFILE)()
+                        logger_general.error("Some kind of error with wallet_sign_tonos")
+    except Exception as error:
+        logger_general.opt(exception=True).debug("Failed on wallet_sign_tonos")
+
+
+
 def sendfile(f, q):
     '''liteclient sendfile'''
     logger_general.info("Sending "+f+" to blockchain...")
@@ -446,11 +496,12 @@ class Cli(cli.Application):
     """Small utility to automate validator requests and get rewards as shown in
     https://test.ton.org/Validator-HOWTO.txt
     """
-    VERSION = "1.3"
+    VERSION = "1.4"
     def main(self):
         if not self.nested_command:
             logger.add(G_LOGFILE, backtrace=True, diagnose=True, filter=lambda record: record["extra"].get("name") == "general")
             global logger_general
+            global REWARD
             logger_general = logger.bind(name="general")
 
             now = pendulum.now()
@@ -460,19 +511,34 @@ class Cli(cli.Application):
             logger_general.info("Starting script, iter = "+str(iter))
             check_env()
             get_balance()
-            get_seqno(False)
+            if not USE_MSIG:
+                get_seqno(False)
             if not get_elector_address():
                 sys.exit() # Exit when there is no elector found, cause we can't do anything
             if compute_returned_stake():
-                if wallet_sign("1.", "recover-query.boc", "return-stake",False) :
-                    if sendfile("return-stake.boc",False):
-                        logger_general.info("Sleep for 15 seconds to complete transaction")
-                        time.sleep(15)     #Test how much time it takes for "seqno" to change
-                        get_seqno(False)
-                        query=db.search(where('success')==True)[-2]['stake'] #get penultimate stake amount where success is True
-                        if query:
-                            global REWARD
-                            REWARD=RETURNED_STAKE-query
+                if USE_MSIG :
+                    if wallet_sign_tonos("1", "recover-query.boc", False) :
+                        logger_general.info("Sleep for 3 minutes to confirm the transaction (msig)")
+                        time.sleep(3)     #Test how much time it takes for "seqno" to change
+                        #get_seqno(False)
+                        try:
+                            query=db.search(where('success')==True)[-2]['stake'] #get penultimate stake amount where success is True
+                            if query:
+                                REWARD=RETURNED_STAKE-query
+                        except Exception as error:
+                            logger_general.opt(exception=True).debug("Failed on reverse search on DB for previous records")
+                else :
+                    if wallet_sign("1.", "recover-query.boc", "return-stake",False) :
+                        if sendfile("return-stake.boc",False):
+                            logger_general.info("Sleep for 15 seconds to complete transaction")
+                            time.sleep(15)     #Test how much time it takes for "seqno" to change
+                            get_seqno(False)
+                            try:
+                                query=db.search(where('success')==True)[-2]['stake'] #get penultimate stake amount where success is True
+                                if query:
+                                    REWARD=RETURNED_STAKE-query
+                            except Exception as error:
+                                logger_general.opt(exception=True).debug("Failed on reverse search on DB for previous records")
             if get_election_time():
                 if not check_success():
                     make_keys()
@@ -480,14 +546,22 @@ class Cli(cli.Application):
                     validator_elect_req()
                     engine_console_sign()
                     validator_elect_sign()
-                    get_seqno(True)
-                    if wallet_sign(STAKE, "validator-query.boc", "finish",True) :
-                        if sendfile("finish.boc",True):
+                    if USE_MSIG :
+                        if wallet_sign_tonos(STAKE, "validator-query.boc",True) :
                             write_success()
                             success=True
-                            logger_elections.info("Sleep for 15 seconds to complete transaction")
-                            time.sleep(15)
-                            get_seqno(True)
+                            logger_elections.info("Sleep for 3 minutes to confirm the transaction (msig)")
+                            time.sleep(3)
+                            #get_seqno(True)
+                    else :
+                        get_seqno(True)
+                        if wallet_sign(STAKE, "validator-query.boc", "finish",True) :
+                            if sendfile("finish.boc",True):
+                                write_success()
+                                success=True
+                                logger_elections.info("Sleep for 15 seconds to complete transaction")
+                                time.sleep(15)
+                                get_seqno(True)
             stake=int(STAKE)*1000000000 #We scale all values to nanograms
             max_factor=int(MAX_FACTOR)
             db.insert({
